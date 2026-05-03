@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>버섯바위 형성 과정 시뮬레이션</title>
+    <style>
+        :root {
+            --bg-color: #5bb1f5;
+            --text-main: #333;
+            --accent: #2980b9;
+            --panel-bg: rgba(255, 255, 255, 0.9);
+        }
+
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: var(--bg-color);
+            font-family: 'Pretendard', 'Malgun Gothic', sans-serif;
+            color: var(--text-main);
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            justify-content: space-between;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        .panel {
+            background: var(--panel-bg);
+            backdrop-filter: blur(10px);
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.15);
+            pointer-events: auto;
+            max-height: calc(100vh - 40px);
+            overflow-y: auto;
+        }
+
+        .left-panel {
+            width: 380px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .right-panel {
+            width: 320px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 1.6rem;
+            color: var(--accent);
+            border-bottom: 2px solid var(--accent);
+            padding-bottom: 10px;
+        }
+
+        h2 {
+            margin: 0;
+            font-size: 1.1rem;
+            color: #555;
+        }
+
+        ul {
+            margin: 10px 0 0 0;
+            padding-left: 20px;
+            font-size: 0.95rem;
+            line-height: 1.6;
+        }
+
+        li {
+            margin-bottom: 6px;
+        }
+
+        .step-container {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .step {
+            padding: 12px 15px;
+            background: rgba(0, 0, 0, 0.05);
+            border-radius: 8px;
+            border-left: 4px solid transparent;
+            font-size: 0.9rem;
+            color: #666;
+            transition: all 0.3s ease;
+        }
+
+        .step.active {
+            background: white;
+            border-left-color: var(--accent);
+            color: #000;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            transform: translateX(-5px);
+            font-weight: bold;
+        }
+
+        .progress-container {
+            width: 100%;
+            height: 8px;
+            background: #ddd;
+            border-radius: 4px;
+            margin-top: 10px;
+            overflow: hidden;
+        }
+
+        .progress-bar {
+            height: 100%;
+            width: 0%;
+            background: var(--accent);
+        }
+
+        .time-label {
+            text-align: right;
+            font-size: 0.85rem;
+            font-weight: bold;
+            color: var(--accent);
+            margin-top: 5px;
+        }
+
+        .wind-indicator {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.6);
+            color: white;
+            padding: 10px 30px;
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            font-weight: bold;
+            letter-spacing: 2px;
+            pointer-events: none;
+        }
+
+        .wind-arrow {
+            width: 60px;
+            height: 2px;
+            background: white;
+            position: relative;
+        }
+
+        .wind-arrow::after {
+            content: '';
+            position: absolute;
+            right: 0;
+            top: -5px;
+            border-top: 6px solid transparent;
+            border-bottom: 6px solid transparent;
+            border-left: 12px solid white;
+        }
+
+        .info-box {
+            background: #eaf4fc;
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            line-height: 1.5;
+            color: #2c3e50;
+            margin-bottom: 15px;
+        }
+
+        strong {
+            color: var(--accent);
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div class="panel left-panel">
+            <div>
+                <h1>버섯바위 (Mushroom Rock)</h1>
+                <p style="color: #666; font-size: 0.9rem; margin-top: 5px;">바람과 모래가 조각한 자연의 예술품</p>
+            </div>
+            
+            <div class="info-box">
+                <h2>형성 조건 (Environment)</h2>
+                <ul>
+                    <li>이집트 백사막과 같은 <strong>건조한 사막 환경</strong></li>
+                    <li>지표면에 풍부한 <strong>모래 입자</strong> 존재</li>
+                    <li>한 방향으로 지속해서 부는 <strong>강한 바람</strong></li>
+                </ul>
+            </div>
+
+            <div class="info-box" style="background: #fff8e1; color: #5c4b13;">
+                <h2>핵심 형성 요인 (Key Factors)</h2>
+                <ul>
+                    <li><strong>풍식 작용 (Abrasion):</strong> 모래 알갱이가 사포처럼 바위를 깎아내는 마모 작용</li>
+                    <li><strong>도약 운동 (Saltation):</strong> 비교적 무거운 모래 알갱이들이 지표면을 따라 통통 튀며 이동 (시각화 강조)</li>
+                    <li><strong>차별적 침식:</strong> 높이 튀어 오르지 못하는 모래 입자들로 인해 바위의 <strong>하부(목) 부분만 집중적으로 깎여나감</strong></li>
+                </ul>
+            </div>
+
+            <div>
+                <div class="progress-container">
+                    <div class="progress-bar" id="progress-bar"></div>
+                </div>
+                <div class="time-label" id="time-label">0 년 경과</div>
+            </div>
+        </div>
+
+        <div class="panel right-panel">
+            <h2 style="border-bottom: 1px solid #ccc; padding-bottom: 10px;">형성 과정 (Process)</h2>
+            <div class="step-container">
+                <div class="step" id="step-0">
+                    <strong>1. 초기 암석 기둥</strong><br>
+                    위아래 굵기가 일정한 거대한 바위 기둥이 사막 지표면에 서 있습니다.
+                </div>
+                <div class="step" id="step-1">
+                    <strong>2. 모래의 도약 운동</strong><br>
+                    강풍에 의해 굵은 모래 알갱이들이 바닥을 치며 튀어 오르기 시작합니다.
+                </div>
+                <div class="step" id="step-2">
+                    <strong>3. 하부 집중 마모</strong><br>
+                    모래 알갱이의 마찰이 지표면 근처(하부)에 집중되며, 바위 밑동이 깎여나가기 시작합니다.
+                </div>
+                <div class="step" id="step-3">
+                    <strong>4. 목(Neck)의 발달</strong><br>
+                    모래가 닿지 않는 상부는 온전하게 유지되고, 하부는 점점 가늘어지며 뚜렷한 기둥 형태가 됩니다.
+                </div>
+                <div class="step" id="step-4">
+                    <strong>5. 버섯 형태 완성</strong><br>
+                    하부가 깊게 파여 상부가 마치 모자처럼 얹혀 있는 아름다운 버섯바위가 완성됩니다.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="wind-indicator">
+        풍향 (WIND) <div class="wind-arrow"></div>
+    </div>
+
+    <script>
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color('#4A90E2'); 
+        scene.fog = new THREE.FogExp2('#4A90E2', 0.008);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(-18, 5, 20); 
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.target.set(0, 3.5, 0);
+        controls.maxPolarAngle = Math.PI / 2 - 0.05;
+        controls.minDistance = 10;
+        controls.maxDistance = 50;
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.65);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xfffae6, 0.8);
+        dirLight.position.set(-20, 20, 10); 
+        dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = 2048;
+        dirLight.shadow.mapSize.height = 2048;
+        dirLight.shadow.camera.left = -15;
+        dirLight.shadow.camera.right = 15;
+        dirLight.shadow.camera.top = 15;
+        dirLight.shadow.camera.bottom = -15;
+        scene.add(dirLight);
+
+        const fillLight = new THREE.DirectionalLight(0xaaccff, 0.3);
+        fillLight.position.set(20, 5, -10);
+        scene.add(fillLight);
+
+        const groundGeo = new THREE.PlaneGeometry(150, 150);
+        const groundMat = new THREE.MeshStandardMaterial({ 
+            color: '#e5d3b3',
+            roughness: 1.0,
+            metalness: 0.0
+        });
+        const ground = new THREE.Mesh(groundGeo, groundMat);
+        ground.rotateX(-Math.PI / 2);
+        ground.receiveShadow = true;
+        scene.add(ground);
+
+        // 4. 초기 바위 형태 생성 (위아래가 동일하게 두꺼운 거대 원기둥으로 시작)
+        const rockRadius = 3.5;
+        const rockHeight = 7.0;
+        // CylinderGeometry(반지름_위, 반지름_아래, 높이, ...)
+        const geometry = new THREE.CylinderGeometry(rockRadius, rockRadius, rockHeight, 128, 64);
+        geometry.translate(0, rockHeight / 2, 0); // y축 0~7 사이에 위치시킴
+
+        const posAttribute = geometry.attributes.position;
+        const originalPositions = new Float32Array(posAttribute.count * 3);
+
+        for (let i = 0; i < posAttribute.count; i++) {
+            let x = posAttribute.getX(i);
+            let y = posAttribute.getY(i);
+            let z = posAttribute.getZ(i);
+
+            let angle = Math.atan2(z, x);
+            let rOrig = Math.sqrt(x*x + z*z);
+
+            // 홀쭉하게 깎는 수식 없이 오직 표면의 울퉁불퉁한 자연스러운 '질감'만 추가
+            let noise = Math.sin(y * 4.0) * 0.15 + 
+                        Math.cos(angle * 5.0) * 0.2 + 
+                        (Math.random() - 0.5) * 0.1;
+            
+            // 상단 모서리를 약간 둥글게 처리
+            if (y > 6.0) noise -= (y - 6.0) * 0.5;
+
+            let r = rOrig + noise;
+            
+            x = r * Math.cos(angle);
+            z = r * Math.sin(angle);
+
+            posAttribute.setXYZ(i, x, y, z);
+            
+            // 원본 위치 (완벽히 두꺼운 상태) 저장
+            originalPositions[i*3] = x;
+            originalPositions[i*3+1] = y;
+            originalPositions[i*3+2] = z;
+        }
+        geometry.computeVertexNormals();
+
+        const rockMat = new THREE.MeshStandardMaterial({ 
+            color: '#fdf4e3', 
+            roughness: 0.9,
+            metalness: 0.05
+        });
+        const rock = new THREE.Mesh(geometry, rockMat);
+        rock.castShadow = true;
+        rock.receiveShadow = true;
+        scene.add(rock);
+
+        // 5. 모래 입자 (Saltation)
+        const particleCount = 600; 
+        const particleGeo = new THREE.BufferGeometry();
+        const pPositions = new Float32Array(particleCount * 3);
+        const pData = [];
+
+        for(let i=0; i<particleCount; i++) {
+            pData.push({
+                x: (Math.random() - 0.5) * 40,
+                z: (Math.random() - 0.5) * 15,
+                speed: 0.15 + Math.random() * 0.1,
+                bounceFreq: 1.5 + Math.random() * 1.5,
+                bounceHeight: 0.5 + Math.random() * 1.5, // 지면 근처만 집중 타격
+                phase: Math.random() * Math.PI * 2
+            });
+        }
+        particleGeo.setAttribute('position', new THREE.BufferAttribute(pPositions, 3));
+        
+        const particleMat = new THREE.PointsMaterial({ 
+            color: '#c27a3c', 
+            size: 0.35, // 크고 선명한 모래 알갱이
+            transparent: true, 
+            opacity: 0.9
+        });
+        const particles = new THREE.Points(particleGeo, particleMat);
+        scene.add(particles);
+
+        // 6. 애니메이션 로직
+        const cycleLength = 16000; // 전체 루프 16초
+        const maxErosionFactor = 2.8; // 침식되어 파이는 최대 깊이
+
+        function getErosionProfile(y) {
+            // 모래가 부딪히는 지표면 근처 (y=1.5 주변)가 가장 많이 깎임
+            let peakHeight = 1.5;
+            let spread = 1.2; 
+            let e = Math.exp(-Math.pow(y - peakHeight, 2) / (2 * spread * spread));
+            
+            // 모래가 튀어 오르지 못하는 상단(4.5 이상)은 전혀 침식되지 않음
+            if (y > 4.5) e = 0.0;
+            return e;
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            let now = Date.now();
+            let t = now % cycleLength;
+            let progress = 0;
+
+            // [사용자 경험 개선]
+            // 초기 온전한 바위를 2초간 보여주고 -> 10초간 깎이고 -> 완성된 버섯바위를 4초간 감상
+            if (t < 2000) {
+                progress = 0; 
+            } else if (t < 12000) {
+                progress = (t - 2000) / 10000;
+            } else {
+                progress = 1;
+            }
+
+            // UI 업데이트
+            document.getElementById('progress-bar').style.width = (progress * 100) + '%';
+            document.getElementById('time-label').innerText = Math.floor(progress * 5000) + " 년 경과";
+
+            let currentStep = Math.floor(progress * 4.99); // 0~4 단계
+            for (let i = 0; i <= 4; i++) {
+                let el = document.getElementById('step-' + i);
+                if (i === currentStep) el.classList.add('active');
+                else el.classList.remove('active');
+            }
+
+            // 바위 침식 형태 업데이트
+            let pos = geometry.attributes.position;
+            for (let i = 0; i < pos.count; i++) {
+                let ox = originalPositions[i*3];
+                let oy = originalPositions[i*3+1];
+                let oz = originalPositions[i*3+2];
+                
+                let rOrig = Math.sqrt(ox*ox + oz*oz);
+                if (rOrig < 0.01) continue;
+
+                let erosionStrength = getErosionProfile(oy);
+
+                let asymmetry = 1.0;
+                if (ox < 0) asymmetry = 1.2; 
+
+                // progress가 0이면 erosionAmount는 0이 되어 처음의 뚱뚱한 기둥 유지
+                let erosionAmount = erosionStrength * asymmetry * maxErosionFactor * progress;
+                
+                // 목이 너무 얇아져서 부러지지 않게 최소 반지름 제한
+                let minRadius = 0.6;
+                let rNew = Math.max(minRadius, rOrig - erosionAmount);
+
+                let ratio = rNew / rOrig;
+                pos.setXYZ(i, ox * ratio, oy, oz * ratio);
+            }
+            pos.needsUpdate = true;
+            geometry.computeVertexNormals();
+
+            // 파티클(모래 알갱이) 도약 운동
+            let particlePos = particleGeo.attributes.position.array;
+            for(let i=0; i<particleCount; i++) {
+                let p = pData[i];
+                p.x += p.speed;
+                if (p.x > 20) p.x = -25; 
+                let bounce = Math.abs(Math.sin((p.x * p.bounceFreq) + p.phase)) * p.bounceHeight;
+                
+                particlePos[i*3] = p.x;
+                particlePos[i*3+1] = bounce + 0.1; 
+                particlePos[i*3+2] = p.z;
+            }
+            particleGeo.attributes.position.needsUpdate = true;
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>

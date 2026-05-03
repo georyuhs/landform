@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>불규칙 지층과 메사/뷰트 형성 시뮬레이션</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #dceaf0;
+            font-family: 'Pretendard', 'Malgun Gothic', sans-serif;
+        }
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+        }
+        /* UI 패널 */
+        #ui-panel {
+            position: absolute;
+            bottom: 25px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 85%;
+            max-width: 800px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 15px 25px;
+            border-radius: 12px;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+            text-align: center;
+            z-index: 10;
+        }
+        h1 { margin: 0 0 10px 0; font-size: 1.2rem; color: #6e3f30; }
+        .controls { display: flex; align-items: center; gap: 15px; }
+        input[type="range"] { flex-grow: 1; cursor: pointer; height: 6px; }
+        button {
+            padding: 8px 16px; background-color: #8a4836; color: white;
+            border: none; border-radius: 6px; cursor: pointer; font-weight: bold;
+        }
+        button:hover { background-color: #5c2f22; }
+        
+        /* 심플한 3D 트래킹 자막 */
+        .geo-label {
+            position: absolute;
+            transform: translate(-50%, -150%);
+            background: rgba(0, 0, 0, 0.65);
+            color: #fff;
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-weight: bold;
+            font-size: 1.1rem;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.3s ease-in-out;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+            z-index: 5;
+            white-space: nowrap;
+            backdrop-filter: blur(4px);
+        }
+        .geo-label.visible { opacity: 1; }
+    </style>
+    <!-- Three.js Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+    <div id="canvas-container"></div>
+    
+    <!-- 심플한 지형 라벨 -->
+    <div id="label-plateau" class="geo-label">고원</div>
+    <div id="label-mesa" class="geo-label">메사</div>
+    <div id="label-butte" class="geo-label">뷰트</div>
+
+    <div id="ui-panel">
+        <h1>차별 침식과 잔존 지형 (고원 → 메사 → 뷰트)</h1>
+        <div class="controls">
+            <button id="playBtn">재생 / 일시정지</button>
+            <input type="range" id="timeSlider" min="0" max="1" step="0.001" value="0">
+        </div>
+    </div>
+
+    <script>
+        // 1. Scene & Camera Setup
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0xdceaf0, 0.012);
+
+        const aspect = window.innerWidth / window.innerHeight;
+        const d = 35; 
+        const camera = new THREE.OrthographicCamera(-d * aspect, d * aspect, d, -d, 1, 1000);
+        camera.position.set(40, 45, 45); 
+        camera.lookAt(0, 0, 0);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.enablePan = false;
+        controls.maxPolarAngle = Math.PI / 2.2;
+
+        // 2. Lighting & Materials
+        scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+        const dirLight = new THREE.DirectionalLight(0xfff0dd, 0.8);
+        dirLight.position.set(30, 60, 20);
+        dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = 2048;
+        dirLight.shadow.mapSize.height = 2048;
+        dirLight.shadow.camera.left = -40; dirLight.shadow.camera.right = 40;
+        dirLight.shadow.camera.top = 40; dirLight.shadow.camera.bottom = -40;
+        scene.add(dirLight);
+
+        const matFloor = new THREE.MeshStandardMaterial({ color: 0xab9461, roughness: 1.0 });
+        const matSoft1 = new THREE.MeshStandardMaterial({ color: 0x9e5f46, roughness: 0.9 });
+        const matHard1 = new THREE.MeshStandardMaterial({ color: 0x5e3527, roughness: 0.8 });
+        const matSoft2 = new THREE.MeshStandardMaterial({ color: 0xb56347, roughness: 1.0 });
+        const matHard2 = new THREE.MeshStandardMaterial({ color: 0x785a48, roughness: 0.9 });
+
+        // 바닥 기단부
+        const floorGeo = new THREE.BoxGeometry(50, 6, 50);
+        const floor = new THREE.Mesh(floorGeo, matFloor);
+        floor.position.y = -3;
+        floor.receiveShadow = true;
+        scene.add(floor);
+
+        // 지층 높이 (총 높이: 7.5)
+        const hS1 = 2.5, hH1 = 1.0, hS2 = 2.5, hH2 = 1.5;
+        const yS1 = hS1/2, yH1 = hS1 + hH1/2, yS2 = hS1 + hH1 + hS2/2, yH2 = hS1 + hH1 + hS2 + hH2/2;
+
+        const pillars = [];
+        let labelTargets = { plateau: null, mesa: null, butte: null };
+
+        function createRoughBox(w, h, d, mat, isTop) {
+            const geo = new THREE.BoxGeometry(w, h, d, isTop?3:1, 1, isTop?3:1);
+            if(isTop) {
+                const pos = geo.attributes.position;
+                for(let i=0; i<pos.count; i++) {
+                    if(pos.getY(i) > h/2 - 0.1) pos.setY(i, pos.getY(i) + (Math.random()*0.4-0.2));
+                }
+                geo.computeVertexNormals();
+            }
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.castShadow = true; mesh.receiveShadow = true;
+            return mesh;
+        }
+
+        function createPillar(x1, x2, z1, z2, role) {
+            const w = x2 - x1;
+            const d = z2 - z1;
+            const cx = (x1 + x2) / 2;
+            const cz = (z1 + z2) / 2;
+
+            const group = new THREE.Group();
+            group.position.set(cx, 0, cz);
+
+            const mS1 = createRoughBox(w, hS1, d, matSoft1, false); mS1.position.y = yS1;
+            const mH1 = createRoughBox(w, hH1, d, matHard1, false); mH1.position.y = yH1;
+            const mS2 = createRoughBox(w, hS2, d, matSoft2, false); mS2.position.y = yS2;
+            const mH2 = createRoughBox(w, hH2, d, matHard2, true);  mH2.position.y = yH2;
+
+            group.add(mS1, mH1, mS2, mH2);
+            scene.add(group);
+
+            // 잔존 지형의 최종 보존 스케일 (침식 강도 설정)
+            let targetScale = 0;
+            if(role === 'plateau') targetScale = 0.98; // 고원: 거의 원형 유지
+            else if(role === 'mesa') targetScale = 0.75; // 메사: 깎이더라도 폭 10 이상 유지 (높이 7.5보다 큼)
+            else if(role === 'butte') targetScale = 0.35; // 뷰트: 폭 2.8로 깎임 (높이 7.5보다 작음)
+            else targetScale = 0.0; // valley: 계곡은 완전히 소멸
+
+            const pillarData = {
+                meshes: [mS1, mH1, mS2, mH2], role: role,
+                origW: w, origD: d, cx: cx, cz: cz,
+                targetScale: targetScale,
+                prevScale: 1.0
+            };
+            pillars.push(pillarData);
+
+            if (role === 'plateau_main') labelTargets.plateau = pillarData;
+            if (role === 'mesa') labelTargets.mesa = pillarData;
+            if (role === 'butte') labelTargets.butte = pillarData;
+        }
+
+        function addArea(x1, x2, z1, z2, role) {
+            if (role === 'valley') {
+                let cols = Math.ceil((x2-x1) / (3 + Math.random()*2));
+                let rows = Math.ceil((z2-z1) / (3 + Math.random()*2));
+                let cw = (x2-x1) / cols;
+                let cd = (z2-z1) / rows;
+                for(let i=0; i<cols; i++) {
+                    for(let j=0; j<rows; j++) {
+                        createPillar(x1 + i*cw, x1 + (i+1)*cw, z1 + j*cd, z1 + (j+1)*cd, 'valley');
+                    }
+                }
+            } else {
+                createPillar(x1, x2, z1, z2, role);
+            }
+        }
+
+        // 3. 지형 레이아웃 설계
+        addArea(-22, -6, -22, -8, 'plateau');
+        addArea(-22, -6, -8, 8, 'plateau_main'); 
+        addArea(-22, -6, 8, 22, 'plateau');
+
+        addArea(-6, 2, -22, 22, 'valley');
+
+        addArea(2, 16, -22, -14, 'valley'); 
+        addArea(2, 16, -14, 0, 'mesa'); // 메사 (원래 너비 14x14)
+        addArea(2, 16, 0, 6, 'valley'); 
+
+        addArea(2, 10, 6, 14, 'valley');
+        addArea(10, 18, 6, 14, 'butte'); // 뷰트 (원래 너비 8x8)
+        
+        addArea(2, 16, 14, 22, 'valley');
+        addArea(16, 22, -22, 22, 'valley');
+        addArea(18, 22, 6, 14, 'valley');
+
+        // 4. 파티클 시스템
+        const particles = [];
+        const partGeo = new THREE.DodecahedronGeometry(0.4);
+        for(let i=0; i<200; i++) {
+            const p = new THREE.Mesh(partGeo, matHard1);
+            p.visible = false; p.castShadow = true;
+            scene.add(p);
+            particles.push({ mesh: p, vy: 0, active: false });
+        }
+        let pIndex = 0;
+        function spawnCollapse(x, y, z, size) {
+            for(let i=0; i<8; i++) {
+                const p = particles[pIndex];
+                p.mesh.position.set(x + (Math.random()-0.5)*size, y, z + (Math.random()-0.5)*size);
+                p.mesh.visible = true;
+                p.vy = Math.random() * 0.1;
+                p.active = true;
+                pIndex = (pIndex + 1) % particles.length;
+            }
+        }
+
+        // 5. 시뮬레이션 및 자막 업데이트 로직
+        const slider = document.getElementById('timeSlider');
+        const playBtn = document.getElementById('playBtn');
+        let isPlaying = false;
+        const vec = new THREE.Vector3();
+
+        function updateLabels(progress) {
+            const isVisible = progress > 0.05; 
+            ['plateau', 'mesa', 'butte'].forEach(type => {
+                const target = labelTargets[type];
+                const el = document.getElementById(`label-${type}`);
+                if(target && el) {
+                    if (isVisible && target.meshes[3].scale.x > 0.01) {
+                        el.classList.add('visible');
+                        vec.set(target.cx, yH2 + 2.5, target.cz); // 지형 꼭대기
+                        vec.project(camera);
+                        const x = (vec.x * 0.5 + 0.5) * window.innerWidth;
+                        const y = (-(vec.y * 0.5) + 0.5) * window.innerHeight;
+                        el.style.left = `${x}px`;
+                        el.style.top = `${y}px`;
+                    } else {
+                        el.classList.remove('visible');
+                    }
+                }
+            });
+        }
+
+        function updateGeomorphology() {
+            let p = parseFloat(slider.value); 
+            let valleyProgress = Math.min(1.0, p * 1.5); // 계곡은 더 빨리 깎임
+
+            pillars.forEach(pillar => {
+                let currentP = pillar.role === 'valley' ? valleyProgress : p;
+                
+                // 경암층 타겟 스케일 계산
+                let scaleH2 = 1.0 - (1.0 - pillar.targetScale) * currentP;
+                
+                // 연암층 언더컷 로직 수정: 완전히 사라지지 않도록 비율로 깎임
+                let scaleS2 = scaleH2 * (1.0 - currentP * 0.35); // 최대 35% 언더컷
+                let scaleH1 = scaleH2; 
+                let scaleS1 = scaleH1 * (1.0 - currentP * 0.25); // 하단 연암층
+
+                // 계곡만 완전히 소멸 처리
+                if (pillar.role === 'valley' && currentP >= 0.95) {
+                    scaleH2 = scaleS2 = scaleH1 = scaleS1 = 0;
+                }
+
+                // 급격한 붕괴 연출 (파티클 스폰)
+                if (pillar.prevScale - scaleH2 > 0.03 && scaleH2 > 0 && pillar.role === 'valley') {
+                    spawnCollapse(pillar.cx, yH2, pillar.cz, pillar.origW * scaleH2);
+                }
+                pillar.prevScale = scaleH2;
+
+                let gap = pillar.role === 'valley' ? p * 0.15 : p * 0.03;
+
+                let wS1 = Math.max(0.001, pillar.origW * scaleS1 - gap);
+                let dS1 = Math.max(0.001, pillar.origD * scaleS1 - gap);
+                let wH1 = Math.max(0.001, pillar.origW * scaleH1 - gap);
+                let dH1 = Math.max(0.001, pillar.origD * scaleH1 - gap);
+                let wS2 = Math.max(0.001, pillar.origW * scaleS2 - gap);
+                let dS2 = Math.max(0.001, pillar.origD * scaleS2 - gap);
+                let wH2 = Math.max(0.001, pillar.origW * scaleH2 - gap);
+                let dH2 = Math.max(0.001, pillar.origD * scaleH2 - gap);
+
+                pillar.meshes[0].scale.set(wS1/pillar.origW, 1, dS1/pillar.origD);
+                pillar.meshes[1].scale.set(wH1/pillar.origW, 1, dH1/pillar.origD);
+                pillar.meshes[2].scale.set(wS2/pillar.origW, 1, dS2/pillar.origD);
+                pillar.meshes[3].scale.set(wH2/pillar.origW, 1, dH2/pillar.origD);
+            });
+
+            updateLabels(p);
+        }
+
+        playBtn.addEventListener('click', () => { isPlaying = !isPlaying; });
+        slider.addEventListener('input', () => { isPlaying = false; updateGeomorphology(); });
+
+        function animate() {
+            requestAnimationFrame(animate);
+            if (isPlaying) {
+                let val = parseFloat(slider.value) + 0.001;
+                if (val > 1) { val = 0; isPlaying = false; }
+                slider.value = val;
+                updateGeomorphology();
+            }
+
+            particles.forEach(p => {
+                if (p.active) {
+                    p.vy -= 0.015; 
+                    p.mesh.position.y += p.vy;
+                    p.mesh.rotation.x += 0.1; p.mesh.rotation.z += 0.1;
+                    if (p.mesh.position.y < -3) { p.active = false; p.mesh.visible = false; }
+                }
+            });
+
+            controls.update();
+            updateLabels(parseFloat(slider.value)); 
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            const aspect = window.innerWidth / window.innerHeight;
+            camera.left = -d * aspect; camera.right = d * aspect;
+            camera.top = d; camera.bottom = -d;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            updateLabels(parseFloat(slider.value));
+        });
+
+        updateGeomorphology();
+        animate();
+    </script>
+</body>
+</html>

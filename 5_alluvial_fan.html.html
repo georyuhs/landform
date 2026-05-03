@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>선상지 및 바하다 시뮬레이터 - 망류하천 및 표면 최적화</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: linear-gradient(to bottom, #87CEEB 0%, #B0E2FF 35%, #E6D2B5 35%, #D2B48C 100%);
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        #ui-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 320px;
+        }
+        h1 { margin: 0 0 10px 0; font-size: 20px; color: #222; }
+        p { margin: 0 0 15px 0; font-size: 13px; color: #444; line-height: 1.5; word-break: keep-all; }
+        button {
+            width: 100%;
+            padding: 12px;
+            font-size: 16px;
+            font-weight: bold;
+            color: white;
+            background-color: #2E8B57;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        button.flowing {
+            background-color: #2b7aab; 
+        }
+        .legend {
+            margin-top: 15px;
+            font-size: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .legend-item { display: flex; align-items: center; gap: 8px; }
+        .box { width: 12px; height: 12px; border-radius: 2px; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-panel">
+        <h1>바하다(Bajada) 시뮬레이터</h1>
+        <p>망류하천(Braided Stream)의 얽힌 채널을 따라 유수가 흐르며, 빽빽하게 쌓인 퇴적물들이 융합되어 거대한 부채꼴 '면'을 형성합니다.</p>
+        <button id="toggleBtn">유수 공급 시작</button>
+        <div class="legend">
+            <div class="legend-item"><div class="box" style="background: #1a1a1a;"></div> 자갈(Gravel) - 곡구(Apex) 인근 면 형성</div>
+            <div class="legend-item"><div class="box" style="background: #9C6631;"></div> 모래(Sand) - 선앙 면 형성</div>
+            <div class="legend-item"><div class="box" style="background: #E8D8C3;"></div> 이토(Silt) - 선단부 멀리 확산</div>
+        </div>
+    </div>
+
+    <canvas id="simCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+        const toggleBtn = document.getElementById('toggleBtn');
+        
+        const bgCanvas = document.createElement('canvas');
+        const bgCtx = bgCanvas.getContext('2d');
+
+        let width, height;
+        let isFlowing = false;
+        let particles = [];
+        let animationId;
+        
+        let apexBaseY;
+        let mountainPoints = [];
+        let valleys = [];
+
+        function resize() {
+            width = canvas.width = bgCanvas.width = window.innerWidth;
+            height = canvas.height = bgCanvas.height = window.innerHeight;
+            apexBaseY = height * 0.45;
+            
+            mountainPoints = [
+                { type: 'R', x: 0, topY: height*0.1, botY: apexBaseY + 30 },
+                { type: 'V', x: width*0.2, topY: height*0.25, botY: apexBaseY - 20 },
+                { type: 'R', x: width*0.4, topY: height*0.05, botY: apexBaseY + 30 },
+                { type: 'V', x: width*0.6, topY: height*0.22, botY: apexBaseY - 20 },
+                { type: 'R', x: width*0.8, topY: height*0.08, botY: apexBaseY + 30 },
+                { type: 'V', x: width*0.95, topY: height*0.28, botY: apexBaseY - 20 },
+                { type: 'R', x: width, topY: height*0.1, botY: apexBaseY + 30 }
+            ];
+
+            // 계곡별 망류하천(Braided Stream) 채널 네트워크 생성
+            valleys = mountainPoints.filter(p => p.type === 'V').map((v) => {
+                let channels = [];
+                let numChannels = 20; // 촘촘한 부채꼴 면을 형성하기 위해 채널 수 증가
+                for (let i = 0; i < numChannels; i++) {
+                    channels.push({
+                        // -0.75 ~ 0.75 라디안 범위로 부채꼴 확산 각도 배정
+                        baseAngle: -0.75 + (i * 1.5 / (numChannels - 1)), 
+                        freq: 0.015 + Math.random() * 0.02, // 공간적 굽이침(Meander) 주기
+                        amp: 0.1 + Math.random() * 0.15,    // 굽이침 진폭
+                        phase: Math.random() * Math.PI * 2  // 교차점 생성을 위한 위상
+                    });
+                }
+                return {
+                    x: v.x,
+                    topY: v.topY,
+                    botY: v.botY,
+                    channels: channels
+                };
+            });
+            
+            drawMountainEnvironment();
+        }
+
+        window.addEventListener('resize', resize);
+
+        // --- 1. 진정한 V자 계곡과 블랙 릴리프 ---
+        function drawMountainEnvironment() {
+            bgCtx.fillStyle = '#D2B48C';
+            bgCtx.fillRect(0, apexBaseY - 50, width, height - (apexBaseY - 50));
+
+            for (let i = 0; i < mountainPoints.length - 1; i++) {
+                let p1 = mountainPoints[i];
+                let p2 = mountainPoints[i+1];
+
+                bgCtx.beginPath();
+                bgCtx.moveTo(p1.x, p1.topY); 
+                bgCtx.moveTo(p1.x, p1.botY); 
+                bgCtx.lineTo(p2.x, p2.botY); 
+                bgCtx.lineTo(p2.x, p2.topY); 
+                bgCtx.lineTo(p1.x, p1.topY); 
+                bgCtx.closePath();
+
+                if (p1.type === 'R') {
+                    bgCtx.fillStyle = '#000000'; // 능선 -> 골짜기 그림자
+                } else {
+                    bgCtx.fillStyle = '#8A3324'; // 골짜기 -> 능선 빛 반사
+                }
+                bgCtx.fill();
+            }
+        }
+
+        function drawRuggedParticle(context, p) {
+            context.fillStyle = p.color;
+            context.beginPath();
+            for (let i = 0; i < p.sides; i++) {
+                const angle = (Math.PI * 2 / p.sides) * i;
+                const radius = p.size * p.radii[i];
+                context.lineTo(p.x + Math.cos(angle) * radius, p.y + Math.sin(angle) * radius);
+            }
+            context.closePath();
+            context.fill();
+        }
+
+        // --- 2. 퇴적물 클래스 (망류하천의 유수를 따라 흐르며 '면'을 형성) ---
+        class Sediment {
+            constructor(valley) {
+                this.valley = valley;
+                this.x = valley.x + (Math.random() - 0.5) * 4; 
+                this.y = valley.topY;
+                this.speed = 3.5 + Math.random() * 2;
+                this.d = 0; // 곡구(Apex) 통과 후 이동 거리 추적
+                this.settled = false;
+                this.channelAssigned = false;
+                this.channel = null;
+                
+                this.sides = Math.floor(Math.random() * 3) + 5;
+                this.radii = [];
+                for(let i=0; i<this.sides; i++) this.radii.push(0.8 + Math.random() * 0.4);
+
+                // 지층의 다채로운 색감 표현 (면으로 쌓였을 때 자연스러움 극대화)
+                const rand = Math.random();
+                if (rand < 0.25) {
+                    this.type = 'gravel';
+                    const shades = ['#111111', '#1a1a1a', '#222222'];
+                    this.color = shades[Math.floor(Math.random() * shades.length)];
+                    this.size = 3.5 + Math.random() * 1.5;
+                    this.friction = 0.88 + Math.random() * 0.03; 
+                } else if (rand < 0.65) {
+                    this.type = 'sand';
+                    const shades = ['#8B5A2B', '#9C6631', '#A0703D'];
+                    this.color = shades[Math.floor(Math.random() * shades.length)];
+                    this.size = 2.5 + Math.random() * 1.5;
+                    this.friction = 0.93 + Math.random() * 0.03; 
+                } else {
+                    this.type = 'silt';
+                    const shades = ['#E8D8C3', '#DCC8B0', '#F0E2D0'];
+                    this.color = shades[Math.floor(Math.random() * shades.length)];
+                    this.size = 1.5 + Math.random() * 1.2;
+                    this.friction = 0.97 + Math.random() * 0.02; 
+                }
+            }
+
+            update(time) {
+                if (this.settled) return;
+
+                if (this.y < this.valley.botY) {
+                    // 산맥 내부에서는 골짜기 정중앙으로 곧게 하강
+                    this.x += (this.valley.x - this.x) * 0.1;
+                    this.y += this.speed;
+                } else {
+                    // 곡구 통과 시 특정 망류하천 채널 배정
+                    if (!this.channelAssigned) {
+                        this.channelAssigned = true;
+                        this.channel = this.valley.channels[Math.floor(Math.random() * this.valley.channels.length)];
+                    }
+                    
+                    // 망류하천의 '공간적 궤적(Spatial Curve)'을 추적
+                    // time을 살짝 곱해주어 지질학적 시간 변화에 따른 미세한 물길 변화(Avulsion) 구현
+                    const currentAngle = this.channel.baseAngle + 
+                        Math.sin(this.d * this.channel.freq + this.channel.phase + time * 0.0002) * this.channel.amp;
+
+                    this.speed *= this.friction;
+
+                    const vx = Math.sin(currentAngle) * this.speed;
+                    const vy = Math.cos(currentAngle) * this.speed;
+
+                    this.x += vx;
+                    this.y += vy;
+                    
+                    // 이동한 거리 누적 (유로의 곡률 계산에 사용)
+                    this.d += Math.sqrt(vx * vx + vy * vy);
+
+                    // 퇴적 시점에 크기를 팽창시켜 입자 간의 빈틈을 없애고 '면'으로 융합
+                    if (this.speed < 0.15) {
+                        this.settled = true;
+                        this.size *= 1.6; // 크기 팽창 융합 효과
+                        drawRuggedParticle(bgCtx, this);
+                    }
+                }
+            }
+
+            draw(context) {
+                if (!this.settled) {
+                    drawRuggedParticle(context, this);
+                }
+            }
+        }
+
+        // --- 3. 정적이고 아름다운 망류하천 (Braided Stream) 렌더링 ---
+        function drawWaterStreams(time) {
+            if (!isFlowing) return;
+
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+
+            valleys.forEach((v) => {
+                // 1. 산맥 내부: 굳건한 단일 메인 유로
+                ctx.strokeStyle = 'rgba(60, 130, 200, 0.8)';
+                ctx.lineWidth = 6;
+                ctx.beginPath();
+                ctx.moveTo(v.x, v.topY);
+                ctx.lineTo(v.x, v.botY);
+                ctx.stroke();
+
+                // 2. 평원: 여러 가닥이 얽힌 망류하천 네트워크 (바람풍선 효과 완벽 제거)
+                v.channels.forEach((ch) => {
+                    ctx.lineWidth = 2.5;
+                    ctx.strokeStyle = 'rgba(60, 130, 200, 0.08)'; // 투명도를 낮춰 겹치는 부분이 진해지도록 함
+
+                    ctx.beginPath();
+                    ctx.moveTo(v.x, v.botY);
+                    
+                    let cx = v.x;
+                    let cy = v.botY;
+
+                    // 미리 정해진 공간 궤적을 따라 물줄기 라인 드로잉
+                    for(let d = 0; d < 250; d += 10) {
+                        const currentAngle = ch.baseAngle + 
+                            Math.sin(d * ch.freq + ch.phase + time * 0.0002) * ch.amp;
+                        cx += Math.sin(currentAngle) * 10;
+                        cy += Math.cos(currentAngle) * 10;
+                        ctx.lineTo(cx, cy);
+                    }
+                    ctx.stroke();
+                });
+            });
+        }
+
+        // --- 4. 애니메이션 루프 ---
+        function animate() {
+            ctx.clearRect(0, 0, width, height);
+            
+            // 영구 퇴적 배경 렌더링
+            ctx.drawImage(bgCanvas, 0, 0);
+
+            const time = Date.now();
+
+            // 안정적인 망류하천 렌더링
+            drawWaterStreams(time);
+
+            // 입자 밀도 극대화 (초당 25개 생성으로 빈틈없는 부채꼴 면 형성)
+            if (isFlowing) {
+                for (let i = 0; i < 25; i++) { 
+                    const randomValley = valleys[Math.floor(Math.random() * valleys.length)];
+                    particles.push(new Sediment(randomValley));
+                }
+            }
+
+            // 입자 업데이트
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.update(time);
+                p.draw(ctx);
+                
+                if (p.settled) {
+                    particles.splice(i, 1);
+                }
+            }
+
+            animationId = requestAnimationFrame(animate);
+        }
+
+        // --- 5. UI 이벤트 ---
+        toggleBtn.addEventListener('click', () => {
+            isFlowing = !isFlowing;
+            if (isFlowing) {
+                toggleBtn.textContent = '유수 공급 중단';
+                toggleBtn.classList.add('flowing');
+            } else {
+                toggleBtn.textContent = '유수 공급 시작';
+                toggleBtn.classList.remove('flowing');
+            }
+        });
+
+        resize();
+        animate();
+
+    </script>
+</body>
+</html>

@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>바르한 사구 - 미시적 도약 운동(Saltation) 시뮬레이션</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #87CEEB;
+            font-family: 'Pretendard', 'Malgun Gothic', sans-serif;
+        }
+        #ui-container {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            pointer-events: auto;
+            max-width: 380px;
+        }
+        h1 {
+            margin: 0 0 10px 0;
+            font-size: 1.4rem;
+            color: #333;
+        }
+        p {
+            font-size: 0.9rem;
+            color: #555;
+            line-height: 1.5;
+            margin-bottom: 15px;
+        }
+        .btn-group {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 15px;
+        }
+        button {
+            flex: 1;
+            padding: 10px 5px;
+            background: #d4a373;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 0.9rem;
+            transition: background 0.2s;
+        }
+        button:hover { background: #bc8f5b; }
+        button.active { background: #8b5a2b; box-shadow: inset 0 2px 5px rgba(0,0,0,0.3); }
+        
+        .info-box {
+            background: #f8f9fa;
+            padding: 12px;
+            border-left: 4px solid #d4a373;
+            font-size: 0.85rem;
+            color: #333;
+            line-height: 1.6;
+        }
+        .highlight { color: #d35400; font-weight: bold; }
+        .math { font-family: 'Times New Roman', Times, serif; font-style: italic; font-weight: bold; }
+        
+        #wind-direction {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 10px 25px;
+            border-radius: 30px;
+            font-weight: bold;
+            letter-spacing: 2px;
+            pointer-events: none;
+        }
+        .arrow {
+            width: 50px;
+            height: 2px;
+            background: white;
+            position: relative;
+        }
+        .arrow::after {
+            content: '';
+            position: absolute;
+            right: 0;
+            top: -4px;
+            border-top: 5px solid transparent;
+            border-bottom: 5px solid transparent;
+            border-left: 10px solid white;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+
+    <div id="ui-container">
+        <h1>바르한 사구 물리 시뮬레이션</h1>
+        <p>도약 운동(Saltation)의 연쇄 충돌 과정과 모래 이동량(Flux)의 공간적 변화를 구현했습니다.</p>
+        
+        <div class="btn-group">
+            <button id="btn-3d" class="active">자유 시점</button>
+            <button id="btn-top">평면 구조(W, L)</button>
+            <button id="btn-side">입자 충돌(Splash)</button>
+        </div>
+
+        <div class="info-box" id="info-text">
+            <strong>[미시적 도약 운동]</strong><br>
+            모래 입자가 중력을 받으며 포물선 궤적으로 이동합니다. 지표에 강하게 충돌(<span class="math">v_imp</span>)할 때 발생하는 충격 에너지가 다른 입자들을 튕겨내는 <strong>연쇄 충돌(Splash)</strong> 효과를 관찰해 보세요.
+        </div>
+    </div>
+
+    <div id="wind-direction">
+        WIND DIRECTION <div class="arrow"></div>
+    </div>
+
+    <script>
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2('#87CEEB', 0.012);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(-12, 6, 12);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.target.set(0, 1, 0);
+        controls.maxPolarAngle = Math.PI / 2 - 0.05;
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.45);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.85);
+        dirLight.position.set(-20, 15, -10);
+        dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = 2048;
+        dirLight.shadow.mapSize.height = 2048;
+        dirLight.shadow.camera.left = -15;
+        dirLight.shadow.camera.right = 15;
+        dirLight.shadow.camera.top = 15;
+        dirLight.shadow.camera.bottom = -15;
+        scene.add(dirLight);
+
+        // 사구 지형 모델링 (L과 W 비율 및 방향 수정)
+        const gridSize = 150;
+        const widthMap = 30;
+        const lengthMap = 30;
+        const geometry = new THREE.PlaneGeometry(lengthMap, widthMap, gridSize, gridSize);
+        geometry.rotateX(-Math.PI / 2);
+
+        const W = 6.5;         // 폭 (Width)
+        const Lw = 9.0;        // 풍상사면 길이 (Length)
+        const H = 2.8;         // 최대 높이
+        const c = 0.15;        // 뿔 곡률
+        const angleOfRepose = 34 * (Math.PI / 180); 
+        const slipSlope = Math.tan(angleOfRepose);
+
+        const groundGeo = new THREE.PlaneGeometry(100, 100);
+        const groundMat = new THREE.MeshStandardMaterial({ color: '#a59375', roughness: 0.95 });
+        const ground = new THREE.Mesh(groundGeo, groundMat);
+        ground.rotateX(-Math.PI / 2);
+        ground.position.y = -0.05;
+        ground.receiveShadow = true;
+        scene.add(ground);
+
+        let time = 0;
+        const duneSpeed = 0.3; // 사구 전체의 이동 속도
+
+        function updateTerrain() {
+            const positions = geometry.attributes.position.array;
+            for (let i = 0; i < positions.length; i += 3) {
+                const x = positions[i];
+                const z = positions[i + 2];
+                let localX = x - (time * duneSpeed);
+                localX = ((localX + 15) % 30) - 15;
+
+                // [수정됨] 뿔이 바람이 부는 방향(+x)으로 향하도록 부호 변경 (-)
+                const xEff = localX - (c * z * z);
+                const wMask = 1.0 - (z * z) / (W * W);
+                
+                let y = 0;
+                if (wMask > 0) {
+                    if (xEff < 0) {
+                        // 풍상사면 (완경사)
+                        const xMask = 1.0 - (xEff * xEff) / (Lw * Lw);
+                        if (xMask > 0) y = H * wMask * xMask;
+                    } else {
+                        // 풍하사면 (급경사, 안식각)
+                        y = (H * wMask) - (slipSlope * xEff);
+                    }
+                }
+                positions[i + 1] = Math.max(0, y);
+            }
+            geometry.attributes.position.needsUpdate = true;
+            geometry.computeVertexNormals();
+        }
+
+        const material = new THREE.MeshStandardMaterial({ 
+            color: '#d6b88b', 
+            roughness: 0.85,
+        });
+        const dune = new THREE.Mesh(geometry, material);
+        dune.castShadow = true;
+        dune.receiveShadow = true;
+        scene.add(dune);
+
+        // -------------------------------------------------------------
+        // 물리 기반 파티클 시스템 (Saltation & Splash 구현)
+        // -------------------------------------------------------------
+        const particleCount = 2500;
+        const particleGeo = new THREE.BufferGeometry();
+        const pPositions = new Float32Array(particleCount * 3);
+        const pData = []; 
+        const gravity = 0.008;
+
+        for(let i=0; i<particleCount; i++) {
+            pData.push({
+                x: (Math.random() - 0.5) * 20,
+                y: 0,
+                z: (Math.random() - 0.5) * W * 2.0,
+                vx: 0.05 + Math.random() * 0.08,
+                vy: Math.random() * 0.15,
+                active: true
+            });
+        }
+        particleGeo.setAttribute('position', new THREE.BufferAttribute(pPositions, 3));
+        const particleMat = new THREE.PointsMaterial({ 
+            color: '#f8e0b5', 
+            size: 0.12, 
+            transparent: true, 
+            opacity: 0.8 
+        });
+        const particles = new THREE.Points(particleGeo, particleMat);
+        scene.add(particles);
+
+        function getTerrainHeightAt(x, z) {
+            let localX = x - (time * duneSpeed);
+            localX = ((localX + 15) % 30) - 15;
+            
+            // [수정됨] 뿔 방향 일치
+            const xEff = localX - (c * z * z);
+            const wMask = 1.0 - (z * z) / (W * W);
+            let y = 0;
+            if (wMask > 0) {
+                if (xEff < 0) {
+                    const xMask = 1.0 - (xEff * xEff) / (Lw * Lw);
+                    if (xMask > 0) y = H * wMask * xMask;
+                } else {
+                    y = (H * wMask) - (slipSlope * xEff);
+                }
+            }
+            return Math.max(0, y);
+        }
+
+        function updateParticles() {
+            const pos = particleGeo.attributes.position.array;
+            
+            for(let i=0; i<particleCount; i++) {
+                let p = pData[i];
+                
+                p.vy -= gravity;
+                p.x += p.vx;
+                p.y += p.vy;
+
+                const terrainY = getTerrainHeightAt(p.x, p.z);
+                
+                if(p.x > 15 || p.z > 15 || p.z < -15) {
+                    p.x = -15 - Math.random() * 5;
+                    p.z = (Math.random() - 0.5) * W * 2.5;
+                    p.y = 0;
+                    p.vx = 0.05 + Math.random() * 0.05;
+                    p.vy = Math.random() * 0.1;
+                }
+
+                if (p.y <= terrainY) {
+                    p.y = terrainY; 
+                    
+                    let localX = p.x - (time * duneSpeed);
+                    localX = ((localX + 15) % 30) - 15;
+                    
+                    // [수정됨] 뿔 방향 일치
+                    const xEff = localX - (c * p.z * p.z);
+
+                    if (xEff > 0 && terrainY > 0) {
+                        p.vy = -0.02; 
+                        p.vx = 0.01;  
+                    } else {
+                        const impactV = Math.abs(p.vy);
+                        p.vy = impactV * 0.4 + 0.08 + (Math.random() * 0.05); 
+                        p.vx = 0.06 + Math.random() * 0.08; 
+                    }
+                }
+
+                pos[i*3] = p.x;
+                pos[i*3+1] = p.y;
+                pos[i*3+2] = p.z;
+            }
+            particleGeo.attributes.position.needsUpdate = true;
+        }
+
+        // 시점 및 UI 제어
+        let targetCameraPos = new THREE.Vector3(-12, 6, 12);
+        let targetCameraLook = new THREE.Vector3(0, 1, 0);
+        let isAnimatingCamera = false;
+        
+        function setView(type) {
+            isAnimatingCamera = true;
+            document.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+            const infoText = document.getElementById('info-text');
+
+            if(type === 'top') {
+                targetCameraPos.set(0, 22, 0);
+                document.getElementById('btn-top').classList.add('active');
+                infoText.innerHTML = "<strong>[평면 구조]</strong><br>바람이 불어가는 방향을 향해 길게 뻗어나가는 양쪽 뿔(Horns)을 명확하게 확인할 수 있습니다.";
+            } else if(type === 'side') {
+                targetCameraPos.set(0, 2.5, 12); 
+                document.getElementById('btn-side').classList.add('active');
+                infoText.innerHTML = "<strong>[단면 구조]</strong><br>바람을 맞는 완만한 풍상사면과 모래가 안식각으로 무너져 내리는 급경사의 풍하사면을 관찰하세요.";
+            } else {
+                targetCameraPos.set(-12, 6, 12);
+                document.getElementById('btn-3d').classList.add('active');
+                infoText.innerHTML = "<strong>[미시적 도약 운동]</strong><br>모래 입자가 포물선 궤적으로 이동하며 연쇄 충돌(Splash) 효과를 일으키는 과정을 관찰해 보세요.";
+            }
+        }
+
+        document.getElementById('btn-top').addEventListener('click', () => setView('top'));
+        document.getElementById('btn-side').addEventListener('click', () => setView('side'));
+        document.getElementById('btn-3d').addEventListener('click', () => setView('3d'));
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if(isAnimatingCamera) {
+                camera.position.lerp(targetCameraPos, 0.05);
+                if(camera.position.distanceTo(targetCameraPos) < 0.1) isAnimatingCamera = false;
+            }
+
+            time += 0.015; 
+            updateTerrain();
+            updateParticles();
+            
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>

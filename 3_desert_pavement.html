@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>삼릉석(Dreikanter) 형성: 하부 침식 및 구르기</title>
+    <style>
+        :root {
+            --panel-bg: rgba(255, 255, 255, 0.9);
+            --text-main: #222;
+            --accent: #d35400; /* 사막 포인트 컬러 */
+        }
+        body {
+            margin: 0; padding: 0; overflow: hidden;
+            background: linear-gradient(to bottom, #5DADE2 0%, #EBF5FB 100%); /* 맑은 하늘색 */
+            font-family: 'Pretendard', -apple-system, sans-serif;
+            color: var(--text-main);
+        }
+        canvas {
+            display: block; width: 100vw; height: 100vh;
+        }
+        #ui-panel {
+            position: absolute; top: 20px; left: 20px;
+            background: var(--panel-bg); padding: 25px;
+            border-radius: 12px; border: 1px solid #ddd;
+            backdrop-filter: blur(10px); width: 340px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+        }
+        h1 { font-size: 20px; color: var(--accent); margin: 0 0 10px 0; letter-spacing: -0.5px; }
+        p.desc { font-size: 13px; color: #555; line-height: 1.5; margin-bottom: 20px; }
+        
+        .control-group { margin-bottom: 15px; }
+        label { display: block; font-size: 12px; margin-bottom: 5px; color: #444; font-weight: bold; }
+        input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
+        
+        .status-box {
+            background: #f8f9fa; border-left: 4px solid var(--accent);
+            padding: 10px; margin-bottom: 15px; font-size: 12px; color: #333;
+        }
+
+        .btn-group { display: flex; gap: 10px; margin-top: 10px; }
+        button {
+            flex: 1; padding: 12px; font-weight: bold; border: none;
+            border-radius: 6px; cursor: pointer; transition: 0.2s;
+            background: #eee; color: #333; border: 1px solid #ccc;
+        }
+        button:hover { background: #e0e0e0; }
+        button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+        #btn-roll { background: #2c3e50; color: white; border-color: #1a252f; }
+        #btn-roll:hover { background: #1a252f; }
+    </style>
+</head>
+<body>
+
+<canvas id="vfxCanvas"></canvas>
+
+<div id="ui-panel">
+    <h1>삼릉석 (Dreikanter) 역학 시뮬레이션</h1>
+    <p class="desc">
+        강력한 바람이 모래를 이동시켜 자갈을 연마합니다. <strong>하부 모래가 깎여나가면(Undermining)</strong> 자갈이 무게중심을 잃고 굴러가며 새로운 면(Facet)을 형성합니다.
+    </p>
+    
+    <div class="status-box">
+        현재 상태: <span id="status-text" style="font-weight:bold; color:#d35400;">대기 중</span>
+    </div>
+
+    <div class="control-group">
+        <label>모래 농도 (Sand Concentration)</label>
+        <input type="range" id="sandDensity" min="1" max="20" value="12">
+    </div>
+
+    <div class="btn-group">
+        <button id="btn-wind">바람 시작</button>
+        <button id="btn-roll">강제 구르기 (Flip)</button>
+    </div>
+</div>
+
+<script>
+const canvas = document.getElementById('vfxCanvas');
+const ctx = canvas.getContext('2d');
+const btnWind = document.getElementById('btn-wind');
+const btnRoll = document.getElementById('btn-roll');
+const sliderDensity = document.getElementById('sandDensity');
+const statusText = document.getElementById('status-text');
+
+let width, height, cx, cy;
+let windActive = false;
+let particles = [];
+let nextFacetId = 1;
+
+// 자갈(Rock) 객체 (수학적 3D 렌더링 적용)
+let rock = {
+    rotation: 0,
+    targetRotation: 0,
+    baseRadius: 110,
+    facets: [], // { id, localAngle, dist }
+    undermining: 0, // 하부 침식 깊이
+    isRolling: false
+};
+
+// 노이즈 패턴 (모래 질감용)
+let noisePattern;
+
+function init() {
+    width = canvas.width = window.innerWidth;
+    height = canvas.height = window.innerHeight;
+    cx = width / 2;
+    cy = height * 0.75; // 지표면 위치
+
+    const nc = document.createElement('canvas');
+    nc.width = 256; nc.height = 256;
+    const nctx = nc.getContext('2d');
+    const idata = nctx.createImageData(256, 256);
+    for(let i=0; i<idata.data.length; i+=4) {
+        let v = 150 + Math.random() * 100;
+        idata.data[i] = v; idata.data[i+1] = v; idata.data[i+2] = v;
+        idata.data[i+3] = 40; 
+    }
+    nctx.putImageData(idata, 0, 0);
+    noisePattern = ctx.createPattern(nc, 'repeat');
+}
+
+// 미세 모래 파티클 클래스
+class Particle {
+    constructor() { this.reset(true); }
+    reset(initial = false) {
+        let heightBias = Math.pow(Math.random(), 2) * 160; 
+        this.x = initial ? Math.random() * cx : -10;
+        this.y = cy - heightBias;
+        this.vx = 15 + Math.random() * 10; // 바람은 항상 좌에서 우로
+        this.vy = -1 + Math.random() * 3;
+        this.size = 1.5 + Math.random() * 2;
+        let shade = 180 + Math.random() * 50;
+        this.color = `rgba(${shade}, ${shade - 30}, ${shade - 70}, 0.8)`;
+    }
+    update() {
+        this.x += this.vx; this.y += this.vy; this.vy += 0.2; 
+        
+        // 지표면 바운스 로직 (하부 침식 웅덩이 반영)
+        let groundY = cy;
+        if (this.x > cx - 200 && this.x < cx) {
+            // 좌측 웅덩이 깊이 계산
+            let dip = Math.sin((this.x - (cx - 200)) / 200 * Math.PI) * rock.undermining * 1.5;
+            groundY += dip;
+        }
+
+        if (this.y > groundY - 5) {
+            this.y = groundY - 5; this.vy *= -0.4; 
+        }
+
+        if (this.x > width + 50) this.reset();
+    }
+    draw() {
+        ctx.fillStyle = this.color;
+        ctx.beginPath(); ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2); ctx.fill();
+    }
+}
+
+// 2D 폴리곤 상의 특정 각도에 대한 반지름 및 소속 면(Facet) 계산
+function getRockRadius(localTh) {
+    // 울퉁불퉁한 기본 바위 형태
+    let baseR = rock.baseRadius + Math.sin(localTh*3)*8 + Math.cos(localTh*5)*5;
+    let minR = baseR;
+    let hitFacetId = -1;
+
+    for (let f of rock.facets) {
+        let diff = localTh - f.localAngle;
+        while(diff < -Math.PI) diff += Math.PI*2;
+        while(diff > Math.PI) diff -= Math.PI*2;
+        
+        // 절단면(Facet) 계산
+        if (Math.abs(diff) < Math.PI / 2) {
+            let cutR = f.dist / Math.cos(diff);
+            if (cutR < minR) {
+                minR = cutR; hitFacetId = f.id;
+            }
+        }
+    }
+    return { r: minR, id: hitFacetId, baseR: baseR };
+}
+
+function drawEnvironment() {
+    // 하늘
+    let sky = ctx.createLinearGradient(0, 0, 0, height);
+    sky.addColorStop(0, '#5DADE2'); sky.addColorStop(0.8, '#EBF5FB');
+    ctx.fillStyle = sky; ctx.fillRect(0, 0, width, height);
+
+    // 모래 지표면 및 하부 침식(Undermining) 웅덩이 렌더링
+    ctx.fillStyle = '#E5C4A0';
+    ctx.beginPath();
+    ctx.moveTo(0, cy);
+    ctx.lineTo(cx - 220, cy);
+    // 바람맞는 좌측의 모래가 파인 형태
+    ctx.quadraticCurveTo(cx - 110, cy + rock.undermining * 2, cx, cy);
+    ctx.lineTo(width, cy); ctx.lineTo(width, height); ctx.lineTo(0, height);
+    ctx.fill();
+
+    // 질감 오버레이
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.globalAlpha = 0.4;
+    ctx.fillStyle = noisePattern;
+    ctx.fill();
+    ctx.globalAlpha = 1.0;
+    ctx.globalCompositeOperation = 'source-over';
+}
+
+function drawFacetedRock() {
+    const NUM_VERTS = 180;
+    let points = [];
+    let lowest_y = -Infinity;
+
+    // 1. 버텍스(꼭짓점) 좌표 및 면 정보 추출
+    for(let i=0; i<NUM_VERTS; i++) {
+        let wTh = (i/NUM_VERTS) * Math.PI*2;
+        let lTh = wTh - rock.rotation;
+        let data = getRockRadius(lTh);
+        
+        let wx = Math.cos(wTh) * data.r;
+        let wy = Math.sin(wTh) * data.r;
+        points.push({ x: wx, y: wy, id: data.id, wTh: wTh, lTh: lTh });
+        
+        if (wy > lowest_y) lowest_y = wy;
+    }
+
+    // 바닥이 항상 지표면에 닿도록 중심 조정
+    let rockCy = cy - lowest_y;
+
+    // 그림자
+    ctx.fillStyle = 'rgba(0,0,0,0.2)';
+    ctx.beginPath();
+    ctx.ellipse(cx + 40, cy, rock.baseRadius, 15, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 2. 버텍스를 면(Facet) 그룹으로 나누어 2.5D 폴리곤 생성
+    let segments = [];
+    let currentSeg = { id: points[0].id, pts: [] };
+    
+    for(let i=0; i<=NUM_VERTS; i++) {
+        let p = points[i % NUM_VERTS];
+        if (p.id !== currentSeg.id && i < NUM_VERTS) {
+            currentSeg.pts.push(p); // 겹치는 코너 포인트 추가
+            segments.push(currentSeg);
+            currentSeg = { id: p.id, pts: [p] };
+        } else {
+            currentSeg.pts.push(p);
+        }
+    }
+    segments.push(currentSeg);
+
+    // 3D 효과를 위한 가상의 꼭대기(Apex) 점
+    let apex = { x: cx, y: rockCy - rock.baseRadius * 0.4 };
+
+    // 3. 면 그리기 및 명암 적용
+    segments.forEach(seg => {
+        if(seg.pts.length < 2) return;
+        
+        ctx.beginPath();
+        ctx.moveTo(apex.x, apex.y);
+        seg.pts.forEach(p => ctx.lineTo(cx + p.x, rockCy + p.y));
+        ctx.closePath();
+
+        // 빛 방향 (우측 상단)에 따른 명암 계산
+        let avgTh = 0;
+        seg.pts.forEach(p => avgTh += p.wTh);
+        avgTh /= seg.pts.length;
+        
+        // 깎인 면(Facet)은 더 밝고 매끄럽게, 기본 면은 어둡고 거칠게
+        let isFacet = seg.id !== -1;
+        let lightDot = Math.cos(avgTh - (-Math.PI/4));
+        let baseLuma = isFacet ? 180 : 130;
+        let shade = baseLuma + lightDot * 60;
+        
+        ctx.fillStyle = `rgb(${shade}, ${shade - 10}, ${shade - 20})`;
+        ctx.fill();
+
+        // 날카로운 능선(Ridge) 윤곽선
+        ctx.strokeStyle = `rgba(255,255,255,${isFacet ? 0.6 : 0.2})`;
+        ctx.lineWidth = isFacet ? 2 : 1;
+        ctx.stroke();
+        
+        ctx.strokeStyle = `rgba(0,0,0,0.3)`;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+    });
+}
+
+function drawLabels() {
+    let accent = '#d35400';
+    
+    // 라벨 함수 내장
+    const makeLabel = (x, y, text, align="left") => {
+        ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI*2); ctx.fillStyle = accent; ctx.fill();
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + (align=="left"?30:-30), y - 30);
+        ctx.lineTo(x + (align=="left"?140:-140), y - 30); ctx.strokeStyle = accent; ctx.lineWidth = 2; ctx.stroke();
+        ctx.fillStyle = 'rgba(255,255,255,0.9)';
+        let tx = align=="left" ? x+35 : x-135;
+        ctx.fillRect(tx-5, y - 52, 105, 24);
+        ctx.fillStyle = '#111'; ctx.font = 'bold 12px Pretendard'; ctx.textAlign = 'left';
+        ctx.fillText(text, tx, y - 36);
+    };
+
+    if (windActive && !rock.isRolling) {
+        makeLabel(cx - rock.baseRadius, cy - rock.baseRadius*0.5, "풍성 연마 (Sandblasting)", "left");
+        if(rock.undermining > 5) {
+            makeLabel(cx - 100, cy + rock.undermining, "하부 침식 (Undermining)", "left");
+        }
+    }
+}
+
+function updateLogic() {
+    // 굴러가는 애니메이션 (Overturning) 처리
+    if (rock.rotation < rock.targetRotation) {
+        rock.isRolling = true;
+        rock.rotation += 0.08;
+        // 구르면서 모래 웅덩이가 메워짐
+        rock.undermining = Math.max(0, rock.undermining - 1.5);
+        statusText.innerText = "무게중심 상실 -> 굴러감 (Overturning)";
+        
+        if (rock.rotation >= rock.targetRotation) {
+            rock.rotation = rock.targetRotation;
+            rock.isRolling = false;
+        }
+        return; 
+    }
+
+    if (windActive && !rock.isRolling) {
+        statusText.innerText = "풍성 연마 및 하부 침식 진행 중...";
+        rock.undermining += 0.15; // 좌측 모래 파임 증가
+
+        // 바람맞는 방향(Math.PI, 좌측)의 면(Facet) 찾기 및 연마
+        let windAngle = Math.PI;
+        let localWind = windAngle - rock.rotation;
+        
+        let targetFacet = rock.facets.find(f => {
+            let diff = localWind - f.localAngle;
+            while(diff < -Math.PI) diff += Math.PI*2;
+            while(diff > Math.PI) diff -= Math.PI*2;
+            return Math.abs(diff) < 0.4;
+        });
+
+        if (!targetFacet) {
+            targetFacet = { id: nextFacetId++, localAngle: localWind, dist: rock.baseRadius };
+            rock.facets.push(targetFacet);
+        } else {
+            targetFacet.dist = Math.max(rock.baseRadius * 0.4, targetFacet.dist - 0.15);
+        }
+
+        // 웅덩이가 깊어지면 무게중심을 잃고 굴러감
+        if (rock.undermining > 35) {
+            triggerRoll();
+        }
+    } else if (!windActive) {
+        statusText.innerText = "대기 중";
+    }
+}
+
+function triggerRoll() {
+    rock.targetRotation += Math.PI * (0.6 + Math.random()*0.2); // 약 100~140도 회전
+}
+
+function render() {
+    ctx.clearRect(0, 0, width, height);
+    updateLogic();
+    drawEnvironment();
+    drawFacetedRock();
+
+    // 파티클
+    if (windActive) {
+        let targetCount = parseInt(sliderDensity.value) * 15; 
+        if (particles.length < targetCount) {
+            for(let i=0; i<3; i++) particles.push(new Particle());
+        } else if (particles.length > targetCount) {
+            particles.splice(0, 3);
+        }
+        particles.forEach(p => { p.update(); p.draw(); });
+    }
+
+    drawLabels();
+    requestAnimationFrame(render);
+}
+
+window.addEventListener('resize', init);
+
+btnWind.addEventListener('click', () => {
+    windActive = !windActive;
+    btnWind.innerText = windActive ? "바람 정지 (Pause)" : "바람 시작";
+    btnWind.classList.toggle('active');
+});
+
+btnRoll.addEventListener('click', triggerRoll);
+
+init();
+render();
+</script>
+
+</body>
+</html>

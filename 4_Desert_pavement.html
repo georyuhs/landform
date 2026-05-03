@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>사막포도 침식설: 미세 입자 유실 시뮬레이션</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #0a0a0a; /* 하늘색 제거, 완전한 어둠 */
+            color: #eee;
+            font-family: 'Pretendard', sans-serif;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        canvas {
+            display: block;
+            background-color: #0a0a0a;
+        }
+        .ui-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(20, 20, 20, 0.8);
+            padding: 20px;
+            border: 1px solid #444;
+            border-radius: 8px;
+            width: 320px;
+        }
+        h1 {
+            font-size: 18px;
+            color: #d2b48c;
+            margin: 0 0 10px 0;
+        }
+        p.desc {
+            font-size: 13px;
+            color: #aaa;
+            line-height: 1.5;
+            margin-bottom: 20px;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+        }
+        button {
+            flex: 1;
+            padding: 10px;
+            background: #333;
+            color: white;
+            border: 1px solid #555;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: 0.2s;
+        }
+        button:hover {
+            background: #d2b48c;
+            color: black;
+        }
+        button.active {
+            background: #d4af37;
+            color: black;
+        }
+    </style>
+</head>
+<body>
+
+<div class="ui-panel">
+    <h1>선택적 침식 (Selective Deflation)</h1>
+    <p class="desc">
+        강력한 풍성 작용으로 인해 지표면의 미세 입자(모래, 먼지)만 공중으로 비산됩니다. 미세 입자가 깎여나감에 따라 지표면이 낮아지며, 무거운 자갈들만 표면에 남게 됩니다.
+    </p>
+    <div class="controls">
+        <button id="windBtn">풍성 작용 시작 (Wind)</button>
+        <button id="resetBtn">지층 초기화</button>
+    </div>
+</div>
+
+<canvas id="simCanvas"></canvas>
+
+<script>
+const canvas = document.getElementById('simCanvas');
+const ctx = canvas.getContext('2d');
+const windBtn = document.getElementById('windBtn');
+const resetBtn = document.getElementById('resetBtn');
+
+let width, height;
+let groundLevel; 
+let windActive = false;
+let rocks = [];
+let dustParticles = [];
+
+// 불규칙한 실사 느낌의 자갈 생성 함수
+function createRock(x, y, radius) {
+    let points = [];
+    let numPoints = 8 + Math.floor(Math.random() * 6); // 8~13개의 꼭짓점
+    for(let i=0; i<numPoints; i++) {
+        let angle = (i / numPoints) * Math.PI * 2;
+        // 반경에 노이즈를 주어 찌그러진 돌 모양 생성
+        let dist = radius * (0.6 + Math.random() * 0.4); 
+        points.push({ x: Math.cos(angle) * dist, y: Math.sin(angle) * dist });
+    }
+    
+    // 돌의 색상 (거친 회갈색/암회색 톤)
+    let shade = 80 + Math.random() * 50;
+    let color = `rgb(${shade}, ${shade - 10}, ${shade - 20})`;
+    let highlight = `rgb(${shade + 40}, ${shade + 30}, ${shade + 20})`;
+    
+    return { x, y, radius, points, color, highlight, isExposed: false };
+}
+
+// 초기화 함수
+function init() {
+    width = canvas.width = window.innerWidth;
+    height = canvas.height = window.innerHeight;
+    
+    // 초기 지표면은 화면의 중간보다 약간 위
+    groundLevel = height * 0.4;
+    rocks = [];
+    dustParticles = [];
+    windActive = false;
+    windBtn.innerText = "풍성 작용 시작 (Wind)";
+    windBtn.classList.remove('active');
+
+    // 지층 내부에 자갈 무작위 배치
+    for(let i=0; i<120; i++) {
+        let r = 15 + Math.random() * 25;
+        let x = Math.random() * width;
+        let y = groundLevel + r + Math.random() * (height - groundLevel - r);
+        rocks.push(createRock(x, y, r));
+    }
+}
+
+// 미세 입자(먼지/모래) 클래스
+class Dust {
+    constructor(startX, startY) {
+        this.x = startX;
+        this.y = startY;
+        this.vx = 5 + Math.random() * 10; // 강력한 바람 속도 (오른쪽으로)
+        this.vy = -1 - Math.random() * 3; // 위로 살짝 뜨는 힘
+        this.size = 1 + Math.random() * 2.5;
+        this.opacity = 0.5 + Math.random() * 0.5;
+        // 모래색
+        this.color = Math.random() > 0.5 ? '#d2b48c' : '#a68a64'; 
+    }
+    update() {
+        this.x += this.vx;
+        this.y += this.vy;
+        this.opacity -= 0.005; // 날아가면서 흩어짐
+    }
+    draw() {
+        ctx.globalAlpha = this.opacity;
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1.0;
+    }
+}
+
+function render() {
+    ctx.clearRect(0, 0, width, height);
+
+    // 1. 지표면 (모래 지층) 그리기 - 명확한 경계
+    ctx.fillStyle = '#6b543a'; // 어두운 흙색
+    ctx.fillRect(0, groundLevel, width, height - groundLevel);
+
+    // 바람이 불 때의 로직
+    if (windActive && groundLevel < height * 0.85) {
+        // 지표면이 깎여 내려감 (미세 입자 유실)
+        groundLevel += 0.3; 
+        
+        // 지표면에서 모래/먼지 파티클 대량 생성 (비산 효과 집중)
+        for(let i=0; i<15; i++) {
+            dustParticles.push(new Dust(Math.random() * width, groundLevel));
+        }
+    }
+
+    // 2. 자갈 그리기
+    rocks.forEach(rock => {
+        // 핵심: 자갈은 허공에서 떨어지지 않음. 
+        // 지표면이 깎여서 자갈의 하단부가 드러나면, 지표면을 타고 그대로 안착함.
+        if (rock.y < groundLevel) {
+            rock.y = groundLevel;
+            rock.isExposed = true; // 표면에 노출됨
+        }
+
+        ctx.save();
+        ctx.translate(rock.x, rock.y);
+        
+        // 자갈 형태 그리기
+        ctx.beginPath();
+        ctx.moveTo(rock.points[0].x, rock.points[0].y);
+        for(let i=1; i<rock.points.length; i++) {
+            ctx.lineTo(rock.points[i].x, rock.points[i].y);
+        }
+        ctx.closePath();
+
+        // 3D 느낌의 음영(Gradient) 적용
+        let grad = ctx.createLinearGradient(-rock.radius, -rock.radius, rock.radius, rock.radius);
+        grad.addColorStop(0, rock.highlight);
+        grad.addColorStop(1, rock.color);
+        ctx.fillStyle = grad;
+        ctx.fill();
+        
+        // 외곽선으로 형태를 더 뚜렷하게
+        ctx.strokeStyle = '#111';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        ctx.restore();
+    });
+
+    // 3. 비산하는 미세 입자 업데이트 및 그리기
+    for (let i = dustParticles.length - 1; i >= 0; i--) {
+        let p = dustParticles[i];
+        p.update();
+        p.draw();
+        // 화면 밖으로 나가거나 투명해지면 제거
+        if (p.x > width || p.opacity <= 0) {
+            dustParticles.splice(i, 1);
+        }
+    }
+
+    requestAnimationFrame(render);
+}
+
+windBtn.addEventListener('click', () => {
+    windActive = !windActive;
+    if(windActive) {
+        windBtn.innerText = "바람 정지 (Pause)";
+        windBtn.classList.add('active');
+    } else {
+        windBtn.innerText = "풍성 작용 시작 (Wind)";
+        windBtn.classList.remove('active');
+    }
+});
+
+resetBtn.addEventListener('click', init);
+window.addEventListener('resize', init);
+
+init();
+render();
+</script>
+
+</body>
+</html>
